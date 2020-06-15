@@ -1,22 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Jun 12 21:09:09 2020
+scrape-transcripts.py
 
-@author: Kelly
+Scrapes Star Trek episode transcripts from chakoteya.net
+
+Author: Kelly Gilbert
+Created: 2020-06-13
+Requirements: 
+    - pandas 0.25 or higher
 """
 
 import requests
 from bs4 import BeautifulSoup
+import pandas as pd
+import numpy as np
 
 url_list = [('Star Trek', 'http://www.chakoteya.net/StarTrek/episodes.htm'),
             ('Deep Space Nine', 'http://www.chakoteya.net/DS9/episodes.htm'),
             ('Voyager', 'http://www.chakoteya.net/Voyager/episode_listing.htm'),
             ('Enterprise', 'http://www.chakoteya.net/Enterprise/episodes.htm')]
 
-u = url_list[2]
+u = url_list[2]    #temp
 
 
-# cycle through the URLs
+# cycle through the series URLs
 df_scripts = None
 for u in url_list:
     series_name = u[0]
@@ -35,21 +42,65 @@ for u in url_list:
     outer_cell = soup.find('table').find('td')
     elements = [e for e in outer_cell.children if str(e).strip() != '']
 
-    # cycle through the elements, recording h2/table pairs
+    # the page is made up of an outer table, containing season headers and season tables.
+    # cycle through the elements of the HTML table, recording header/table pairs
+    e = 1   # temp
+
     for e in range(0, len(elements)):       
-        
+                
         if str(elements[e])[0:4] == '<h2>':
             season = elements[e].text.strip()            
-            df = read_html(str(elements[e+1]))[0]
-            df['season'] = season
+            df = pd.read_html(str(elements[e+1]))[0]
+            
+            #rename cols using first row
+            cols = [c.strip().lower().replace(' ', '_') for c in df.iloc[0]]
+            df = df[1:]
+            df.columns = cols
+            
+            # add series and season
             df['series_name'] = series_name
+            df['season'] = season
             
             # get the URLs for each episode
-            str(elements[e+1])
+            links = pd.Series([str(s) for s in elements[e+1].find_all('a')])
+            links = links.str.extract(r'<a href="(?P<link>\d+\.htm)">(?P<episode_name>.*?)</a>')
             
             # cycle through the URLs and get the script text
             
+            r2 = requests.get('http://www.chakoteya.net/Voyager/119.htm')
+            soup = BeautifulSoup(r2.text, 'lxml')
             
+            c = pd.DataFrame([c for c in list(soup.td.contents) if str(c).strip() != ''])
+            
+            
+            pd. __version__
+            
+            
+            len(c)      
+            
+            c['row_text'] = [t.text.strip() for t in c[0]]
+            
+            # if \r\n is followed by open parenthesis or a capital letter, then
+            # replace it with a line break, \n. Otherwise, replace with a space.
+            c['row_text'] = c['row_text'].str.replace('\r\n(?=(\(|[A-Z]+\:))', '\n', regex=True)
+            c['row_text'] = c['row_text'].str.replace('\r\n', ' ', regex=True)
+            c['row_text'] = [r.split('\n') for r in c['row_text']]
+            
+            # break the lines into separate rows
+            c.explode('row_text')
+            
+            c['row_type'] = np.where(c['row_text'].str[0] == '[', 'scene start', 
+                              np.where(c['row_text'].str[0] == '(', 'action', 'other'))
+            
+            c['row_text2'] = c['row_text'].str.replace('(?<=\s)\r\n', 'xxxx', regex=True)
+            c['row_text2'].iloc[1]
+
+            c['row_text'].iloc[1]
+ 
+             \r\n followed by capital or ( --> replace with \n
+             \r\n otherwise --> replace with space
+
+
             # union the new data to the main dataframe
 
         # skip the next element (the table)
