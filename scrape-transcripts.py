@@ -18,6 +18,20 @@ import re
 
 
 
+def clean_text(obj):
+    if type(obj).__name__ == 'NavigableString':
+        o = obj
+    else:
+        o = obj.text 
+        
+    return o.strip()    
+
+
+
+
+
+
+
 url_list = [('Star Trek', 'http://www.chakoteya.net/StarTrek/episodes.htm'),
             ('Deep Space Nine', 'http://www.chakoteya.net/DS9/episodes.htm'),
             ('Voyager', 'http://www.chakoteya.net/Voyager/episode_listing.htm'),
@@ -31,8 +45,8 @@ df_scripts = None
 
 for u in url_list[2:3]:
     series_name = u[0]
-    url_prefix = re.search('(.*\/).*', u[1])[0]
-
+    url_prefix = re.search('(.*\/)(.*)', u[1])[1]   
+    
     # get the contents of the episode listing page    
     r = requests.get(u[1], headers={'User-Agent': 'Custom'})
 
@@ -88,63 +102,62 @@ for u in url_list[2:3]:
         e += 1
         
         
-        
-        
-        
-        df_scripts.columns
+# cycle through the episode links and parse the transcripts into blocks        
+link = df_scripts['link'].iloc[0]
 
+for link in df_scripts['link']:              
+    # get the html contents for the episode transcript
+    r = requests.get(link)
+    soup = BeautifulSoup(r.text, 'lxml')
 
+    script_lines = pd.DataFrame( {'row_text' : [clean_text(c) for c in soup.td.contents]} )
 
+    # if \r\n is followed by open parenthesis or capital letters followed by :, 
+    # then replace with a line break, \n. Otherwise, replace with a space.
+    script_lines['row_text'] = script_lines['row_text'].str.replace('\r\n(?=(\(|[A-Z]+\:))', '\n', regex=True)
+    script_lines['row_text'] = script_lines['row_text'].str.replace('\r\n', ' ', regex=True)
+    
+    # split individual lines into lists
+    script_lines['row_text'] = [r.split('\n') for r in script_lines['row_text']] 
+    
+    # break the lists into separate rows
+    script_lines = script_lines.explode('row_text')   
 
+    # remove rows that are just whitespace 
+    script_lines = script_lines[script_lines['row_text'].str.strip() != '']
+    
+    # label the rows
+    script_lines['row_type'] = np.where(script_lines['row_text'].str[0] == '[', 'scene location', 
+                                 np.where(script_lines['row_text'].str[0] == '(', 'description', 
+                                   np.where(script_lines['row_text'].str, '', '')))   #, 
 
-
-
-
-
-type(df)
-type(df_scripts)
-
-df_scripts.iloc[0]
-
-
-
-
-
-
-
-                     
-            # cycle through the episode URLs and get the script text
-            for episode_name, link in df[['episode_name','link']]:
-                episode_name, link = df[['episode_name','link']].iloc[0] #temp
-              
-                r = requests.get(link)
-                soup = BeautifulSoup(r.text, 'lxml')
-             
-                c = pd.DataFrame([c for c in list(soup.td.contents) if str(c).strip() != ''])
-                c.columns = ['row_text']
-                c['episode_name'] = episode_name
-
-                # clean the text
-                c['row_text'] = [t.text.strip() for t in c['row_text']]
-
-                # if \r\n is followed by open parenthesis or a capital letter, then
-                # replace it with a line break, \n. Otherwise, replace with a space.
-                c['row_text'] = c['row_text'].str.replace('\r\n(?=(\(|[A-Z]+\:))', '\n', regex=True)
-                c['row_text'] = c['row_text'].str.replace('\r\n', ' ', regex=True)
-                c['row_text'] = [r.split('\n') for r in c['row_text']]
-
-                # break the lines into separate rows
-                c = c.explode('row_text')           
-            c['row_type'] = np.where(c['row_text'].str[0] == '[', 'scene start', 
-                              np.where(c['row_text'].str[0] == '(', 'action', 'other'))
             
-            c['row_text2'] = c['row_text'].str.replace('(?<=\s)\r\n', 'xxxx', regex=True)
-            c['row_text2'].iloc[1]
+    script_lines.head()
+  
+    # copy down scene location
+    
+    # parse speaker from lines
+    
+    # add link for joining
+    
+    # end columns: line, speaker, scene location, link (for joining)
+    # other types of lines (e.g. description of action) will have speaker = null
+  
+    # union to main lines dataset
+    
+    
+    
+# merge with main dataset
+  
+    
+  
+    
 
-            c['row_text'].iloc[1]
- 
-             \r\n followed by capital or ( --> replace with \n
-             \r\n otherwise --> replace with space
+    script_lines['link'] = link
+
+script_lines['row_text'].iloc[300]
+
+
 
 
             
