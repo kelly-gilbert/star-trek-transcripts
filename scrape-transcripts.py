@@ -10,11 +10,13 @@ Requirements:
     - pandas 0.25 or higher
 """
 
-import requests
 from bs4 import BeautifulSoup
-import pandas as pd
+from csv import QUOTE_ALL
 import numpy as np
+from os import chdir
+import pandas as pd
 import re
+import requests
 
 
 
@@ -22,28 +24,37 @@ def clean_text(obj):
     if type(obj).__name__ == 'NavigableString':
         o = obj
     else:
+        # replace line breaks with characters
+        for br in obj.find_all(['br', 'p']):
+            br.replace_with(br.text + '\n\n')
         o = obj.text 
         
     return o.strip()    
 
 
 
+#------------------------------------------------------------------------------
+# Setup
+#------------------------------------------------------------------------------
+    
+# set the working directory
+chdir('C:\\projects\\star-trek-transcripts\\')
 
-
-
-
-url_list = [('Star Trek', 'http://www.chakoteya.net/StarTrek/episodes.htm'),
+# urls to scrape
+urls = [('Star Trek', 'http://www.chakoteya.net/StarTrek/episodes.htm'),
             ('Deep Space Nine', 'http://www.chakoteya.net/DS9/episodes.htm'),
             ('Voyager', 'http://www.chakoteya.net/Voyager/episode_listing.htm'),
             ('Enterprise', 'http://www.chakoteya.net/Enterprise/episodes.htm')]
 
 
-u = url_list[2]    #temp
+
+#------------------------------------------------------------------------------
+# Get the list of episodes and export to csv
+#------------------------------------------------------------------------------
 
 # cycle through the series URLs and get the list of episode URLs
-df_scripts = None
-
-for u in url_list[2:3]:
+df_episodes = None    # initialize the episodes dataframe
+for u in urls[2:3]:
     series_name = u[0]
     url_prefix = re.search('(.*\/)(.*)', u[1])[1]   
     
@@ -51,7 +62,7 @@ for u in url_list[2:3]:
     r = requests.get(u[1], headers={'User-Agent': 'Custom'})
 
     if r.status_code != 200:    # not successful
-        print('Error ' + str(r.status_code) + ': ' + url_list[i])
+        print('Error ' + str(r.status_code) + ': ' + urls[u])
         continue
     
     soup = BeautifulSoup(r.text, 'lxml')
@@ -63,181 +74,181 @@ for u in url_list[2:3]:
 
     # the page is made up of an outer table, containing season headers and season tables.
     # cycle through the elements of the HTML table, recording header/table pairs   
+
+    # elements = elements in the main table of the page
+    # df_season = temp dataframe containing the episode list for one season
+    # df_episodes = the final dataframe that contains the list of episodes
+    df_episodes = None
     e = 0
     while e < len(elements):       
-        print('processing element ' + str(e))
-        print(str(elements[e])[0:100])
         if str(elements[e])[0:3].strip() == '<h2':
-            print('element ' + str(e) + ' is a header')
             # get the season name from the header
             season = elements[e].text.strip()            
             
             # get the season episode list from the next element in the table
-            df = pd.read_html(str(elements[e+1]))[0]
+            df_season = pd.read_html(str(elements[e+1]))[0]
             
             #rename cols using first row
-            cols = [c.strip().lower().replace(' ', '_') for c in df.iloc[0]]
-            df = df[1:]
-            df.columns = cols
+            cols = [c.strip().lower().replace(' ', '_') for c in df_season.iloc[0]]
+            df_season = df_season[1:]
+            df_season.columns = cols
+            
+            # clean episode name
+            df_season['episode_name'].str.replace('\s+', ' ', regex=True)
             
             # add series and season
-            df['series_name'] = series_name
-            df['season'] = season
+            df_season['series_name'] = series_name
+            df_season['season'] = season
+            
             
             # get the URLs for each episode and add them to the main dataframe
-            links = pd.Series([str(s) for s in elements[e+1].find_all('a')])
-            links = links.str.extract(r'<a href="(?P<link>\d+\.htm)">(?P<episode_name>.*?)</a>')
-            links['link'] = url_prefix + links['link']
+            df_links = pd.Series([str(s) for s in elements[e+1].find_all('a')])
             
-            df = df.merge(links, how='left', on='episode_name') 
+            # clean up extra linebreaks and split into episode name and link
+            df_links = df_links.str.replace('\s+', ' ', regex=True)
+            df_links = df_links.str.extract(r'<a href="(?P<link>\d+\.htm.*?)">(?P<episode_name>.*?)</a>')
+            df_links['link'] = url_prefix + df_links['link']
+            
+            # join back to season episode list on episode name
+            df_season_links = df_season.merge(df_links, how='outer', on='episode_name') 
  
-            # union the new data to the main dataframe
-            df_scripts = pd.concat([df_scripts, df])
+            # union the season to the main episode list
+            df_episodes = pd.concat([df_episodes, df_season_links])
 
             # skip the next element (the table)
             e += 2
             continue
 
-    else:    # not a season header
-        e += 1
-        
-        
-# cycle through the episode links and parse the transcripts into blocks        
-link = df_scripts['link'].iloc[0]
+        else:    # not a season header - go to the next element
+            e += 1
+ 
 
-for link in df_scripts['link']:              
+# export the episode list/URLs to csv
+df_episodes.to_csv('.\\star-trek-esisode-list.csv', index=False, quoting=QUOTE_ALL)
+
+
+
+#------------------------------------------------------------------------------
+# Get and parse the individual transcripts
+#------------------------------------------------------------------------------
+
+# cycle through the episode links and parse the transcripts into lines        
+#   df_episodes is the main listing of episodes with links to each transcript
+#   df_scripts is the main dataframe of parsed scripts
+#   df_curr is the current script being parsed
+#   df_curr_rows is the current script, with lines parsed into separate rows
+
+df_episodes = pd.read_csv('.\\star-trek-esisode-list.csv')
+
+df_scripts = None
+prev_link = '|||'
+for link in df_episodes['link']:  
+            
+    # ignore continuations
+    if prev_link in link:
+        continue
+    
     # get the html contents for the episode transcript
     r = requests.get(link)
     soup = BeautifulSoup(r.text, 'lxml')
-
-    script_lines = pd.DataFrame( {'row_text' : [clean_text(c) for c in soup.td.contents]} )
+  
+    # parse the contents into a dataframe
+    df_curr = pd.DataFrame( {'row_text' : [clean_text(c) for c in soup.td.contents]} )
 
     # if \r\n is followed by open parenthesis or capital letters followed by :, 
-    # then replace with a line break, \n. Otherwise, replace with a space.
-    script_lines['row_text'] = script_lines['row_text'].str.replace('\r\n(?=(\(|[A-Z]+\:))', '\n', regex=True)
-    script_lines['row_text'] = script_lines['row_text'].str.replace('\r\n', ' ', regex=True)
+    # then replace with a line break, \n. 
+    # Otherwise, replace \r\n with a space.
+    # Replace tabs (\t) with empty string
+    df_curr['row_text'] = df_curr['row_text'].str.replace('\t', '', regex=True)
+    df_curr['row_text'] = df_curr['row_text'].str.replace('\r\n(?=(\(|[A-ZÀ-Ý\w\s\[\]\(\)]+\:))', '\n', regex=True)
+    df_curr['row_text'] = df_curr['row_text'].str.replace('\r\n', ' ', regex=True)
+
     
     # split individual lines into lists
-    script_lines['row_text'] = [r.split('\n') for r in script_lines['row_text']] 
+    df_curr['row_text'] = [r.split('\n') for r in df_curr['row_text']] 
     
     # break the lists into separate rows
-    script_lines = script_lines.explode('row_text')   
+    df_curr = df_curr.explode('row_text')   
+    
+    # remove rows that are just whitespace and strip the remaining rows
+    df_curr['row_text'] = df_curr['row_text'].str.strip()
+    df_curr = df_curr[df_curr['row_text'] != '']
+    
+    # extract the speaker from the line
+    df_curr_rows = df_curr['row_text'].str.extract(r'(?P<speaker>[A-ZÀ-Ý\w\s\[\]\(\)]+(?=\: ))?\:? *(?P<line>.*)')
+   
+    
+    # label the row types
+    df_curr_rows['row_type'] = np.where(df_curr_rows['speaker'].isna() == False, 'line',
+                                np.where(df_curr_rows['line'].str[0] == '[', 'scene description', 
+                                 np.where(df_curr_rows['line'].str[0] == '(', 'description', 'other'))) 
 
-    # remove rows that are just whitespace 
-    script_lines = script_lines[script_lines['row_text'].str.strip() != '']
+    # move the scene description into its own column and copy down
+    df_curr_rows['scene_description'] = np.where(df_curr_rows['row_type']=='scene description', 
+                                                df_curr_rows['line'], np.nan)
     
-    # label the rows
-    script_lines['row_type'] = np.where(script_lines['row_text'].str[0] == '[', 'scene location', 
-                                 np.where(script_lines['row_text'].str[0] == '(', 'description', 
-                                   np.where(script_lines['row_text'].str, '', '')))   #, 
+    df_curr_rows['scene_description'].ffill(inplace=True)
+    df_curr_rows = df_curr_rows[df_curr_rows['row_type'] != 'scene description']
 
-            
-    script_lines.head()
-  
-    # copy down scene location
-    
-    # parse speaker from lines
-    
     # add link for joining
+    df_curr_rows['link'] = link
+      
+    # concatenate with previous script data
+    df_scripts = pd.concat([df_scripts, df_curr_rows])
     
-    # end columns: line, speaker, scene location, link (for joining)
-    # other types of lines (e.g. description of action) will have speaker = null
-  
-    # union to main lines dataset
-    
-    
-    
-# merge with main dataset
-  
-    
-  
+    prev_link = link
     
 
-    script_lines['link'] = link
 
-script_lines['row_text'].iloc[300]
+#------------------------------------------------------------------------------
+# Clean up parsing issues
+#------------------------------------------------------------------------------
 
+# if speaker is [OC] only or "and...", then get the line from the previous row 
+# and append it to the speaker name
+# next, delete the previous row
+missing_speaker = df_scripts[df_scripts['speaker'].str.match('\[.*\]$', na=False) 
+                             | df_scripts['speaker'].str.match('^and .*', na=False)]
 
-
-
-            
+for s in missing_speaker.index:
+    df_scripts.loc[s]['speaker'] = str(df_scripts.loc[s-1]['line']) + ' ' \
+                                   + str(df_scripts.loc[s]['speaker'])
+    df_scripts.drop(index=[s-1], inplace=True)
     
-
-        
-         = list(outer_table.children)
-        len(c) 
-        c[5]
-        len(children)
-        
-        type(children[3])
-        
-        
-        
-        c2 = [x for x in c if x != '\n']
-        outer_table2 = list(outer_table.children)[1]
- 
-type(c)
-
-        
-        # find the outer table
-        outer = soup.find('table')
-        
-        
-        df = read_html(str(outer))
-        df        
-        
-
-        # get the season header
-        season = outer.find('h2').text.strip()
-        
-        
-        
-        
-        t = soup.find('table').find('table')
-        t
-        str(t)
-        type(t)
-        t.dtype()      
+    
+# assume all "Captain's log..." entries are JANEWAY speaking
+captains_log = df_scripts[df_scripts['line'].str.match('Captain\'s log.*', 
+                                                       na=False) 
+                          & df_scripts['speaker'].isna()]
+for c in captains_log.index:
+    df_scripts.loc[c]['speaker'] = 'JANEWAY'
 
 
-        df = read_html(str(t))
-        df
-        len(df)
-        
-        album.text.strip()
-        try:
-            album = album.find_all('a')[1].get('title')[9:]
-        except:
-            album = 'Unknown'
-        song_dict['album'] = album
-        
-        # get the lyrics
-        try:
-            lyrics = soup.find(class_='lyricbox')
-            lyrics = chr(10).join(lyrics.stripped_strings)
-        except:
-            lyrics = ''
-        song_dict['lyrics'] = lyrics
-        
-        return song_dict
-        
+# fix speaker names with a stray p
+df_scripts['speaker'] = df_scripts['speaker'].str.replace('^p', '', regex=True)    
 
-from pandas import read_html
 
-df = read_html('http://www.chakoteya.net/Voyager/episode_listing.htm', match='Season')
-df
-df[1]
+# fix incorrectly parsed scene descriptons 
+habitat = df_scripts[df_scripts['speaker'] == '(Habitat']
+for h in habitat.index:
+    df_scripts.loc[h]['line'] = str(df_scripts.loc[h]['speaker']) + ': ' \
+                                    + str(df_scripts.loc[h]['line'])
+    df_scripts.loc[h]['speaker'] = np.nan
+    df_scripts.loc[h]['row_type'] = 'description'
+
+
+# fix speaker names with a stray (
+df_scripts['speaker'] = df_scripts['speaker'].str.replace('^\(', '', regex=True)    
 
 
 
+#------------------------------------------------------------------------------
+# Output to csv
+#------------------------------------------------------------------------------
 
-df[0].iloc[0]
-
-len(df)
-df[7].columns
-
-new_header = df[0].iloc[0] 
-
-df = df[1:] 
-
-df.columns = new_header
+# after all scripts have been parsed, merge with episode list
+df_final = df_episodes.merge(df_scripts, how='left', on='link')
+      
+# output to csv
+df_final.to_csv('.\\star-trek-transcripts_parsed.csv', index=False, 
+                quoting=QUOTE_ALL)
